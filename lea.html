@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="fa">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Map Viewer</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css"/>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@turf/turf"></script>
+    <style>
+        body, html {
+            height: 100%;
+            margin: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        #mapid {
+            width: 100%;
+            height: 100%;
+        }
+        #info {
+            position:fixed;
+            top: 10px;
+            right: 10px;
+            background: rgba(255, 255, 255, 0.8);
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 1000;
+            display: none; 
+            
+        }
+        #info label, #info input, #info button {
+            display: block;
+            width: 100%;
+            margin-bottom: 5px;
+        }
+        #info input {
+            padding: 5px;
+            border: 1px solid #ccc;
+            border-radius: 3px;
+        }
+        #info button {
+            padding: 7px;
+            border: none;
+            border-radius: 5px;
+            background-color: #007bff;
+            color: white;
+            cursor: pointer;
+        }
+        #info button:hover {
+            background-color: #3b8525;
+        }
+        #routeInfo {
+            position:absolute;
+            top: 300px;
+            left: 10px;
+            right: 1250px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 500;
+            overflow: auto;
+            /* اضافه کردن اسکرول اتوماتیک */
+            max-height: 400px;
+            max-width: 200px;
+            /* تعیین ارتفاع حداکثر برای نمایش اسکرول */
+        }
+        #info.show {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div id="mapid"></div>
+    <div id="info">
+        <label for="name">نام:</label>
+        <input type="text" id="name" placeholder="نام">
+        <label for="route">مسیر:</label>
+        <input type="text" id="route" placeholder="مسیر">
+        <label for="customer_code">کد مشتری:</label>
+        <input type="text" id="customer_code" placeholder="کد مشتری">
+        <button onclick="updateInfo()">update</button>
+        <button onclick="editCustomersInPolygon()">ویرایش مشتریان در چندضلعی</button>
+    </div>
+    <div id="routeInfo" class="info">
+        <h3>اطلاعات مسیر</h3>
+        <input type="text" id="filter" placeholder="جستجوی مسیر" oninput="filterRoutes()">
+        <ul id="routeList"></ul>
+    </div>
+    <script>
+        var map = L.map('mapid').setView([35.60000, 51.2000], 11);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19
+        }).addTo(map);
+        map.on(L.Draw.Event.CREATED, function (event) {
+            var layer = event.layer;
+            drawnItems.addLayer(layer);
+            updateCustomersInPolygon(layer);
+        });
+        var drawnItems = new L.FeatureGroup();
+        map.addLayer(drawnItems);
+        var drawControl = new L.Control.Draw({
+            edit: {
+                featureGroup: drawnItems
+            },
+            draw: {
+                polygon: true,
+                polyline: true,
+                rectangle: false,
+                circle: true,
+                marker: false
+            }   
+        });
+        map.addControl(drawControl);
+        var routeColors = {};
+        var markers = {};
+        var selectedMarkers = []; // اضافه کردن 
+    
+        function getRandomColor() {
+            var letters = '0123456789ABCDEF';
+            var color = '#';
+            for (var i = 0; i < 6; i++) {
+                color += letters[Math.floor(Math.random() * 16)];
+            }
+            return color;
+        }
+
+        function updateRouteList() {
+            var routeList = document.getElementById('routeList');
+            routeList.innerHTML = ''; // Clear the list
+            Object.keys(routeColors).forEach(function(route) {
+                var colorSquare = '<span style="display: inline-block; width: 12px; height: 12px; background-color: ' + routeColors[route] + '; margin-right: 5px;"></span>';
+                var listItem = '<li>' + colorSquare + route + '</li>';
+                routeList.innerHTML += listItem;
+            });
+        }
+
+        function filterRoutes() {
+            var filterValue = document.getElementById('filter').value.toLowerCase();
+            var listItems = document.getElementById('routeList').getElementsByTagName('li');
+            for (var i = 0; i < listItems.length; i++) {
+                var item = listItems[i].textContent || listItems[i].innerText;
+                if (item.toLowerCase().indexOf(filterValue) > -1) {
+                    listItems[i].style.display = "";
+                } else {
+                    listItems[i].style.display = "none";
+                }
+            }
+            filterMarkers(); // فیلتر کردن مارکرها بر اساس مقدار وارد شده
+        }
+
+        function filterMarkers() {
+            var filterValue = document.getElementById('filter').value.toLowerCase();
+            for (var route in markers) {
+                if (route.toLowerCase().indexOf(filterValue) > -1) {
+                    markers[route].forEach(function(marker) {
+                        marker.setOpacity(1); // نمایش مارکر
+                    });
+                } else {
+                    markers[route].forEach(function(marker) {
+                        marker.setOpacity(0); // پنهان کردن مارکر
+                    });
+                }
+            }
+        }
+    
+        new QWebChannel(qt.webChannelTransport, function (channel) {
+            var bridge = channel.objects.bridge;
+            bridge.loadData().then(function (data) {
+                var customers = JSON.parse(data);
+                if (Array.isArray(customers)) {
+                    customers.forEach(function (customer) {
+                        if (!routeColors[customer.محدوده]) {
+                            routeColors[customer.محدوده] = getRandomColor();
+                            markers[route] = []; // ایجاد آرایه برای نگهداری مارکرهای مسیر
+                            updateRouteList(); // Update the route list whenever a new color is added
+                        }
+                        if (customer.lat && customer.lng) {
+                            var marker = L.circleMarker([customer.lat, customer.lng], {
+                                fillColor: routeColors[customer.محدوده],
+                                color: '#000',
+                                fillOpacity: 0.8,
+                                radius: 8
+                            }).addTo(map);
+                            markers[customer.Code] = marker;
+                            marker.bindPopup('کد مشتری: ' + customer.Code + '<br>محدوده: ' + customer.محدوده + '<br>منطقه: ' + customer.منطقه + '<br>نام: ' + customer.Name + '<br>adres: ' + customer.adres )
+                            .on('click', function() {
+                                document.getElementById('info').style.display = 'block';
+                                document.getElementById('name').value = customer.Name;
+                                document.getElementById('route').value = customer.محدوده;
+                                document.getElementById('customer_code').value = customer.Code;
+                                document.getElementById('adres').value = customer.adres;
+                                
+                            });
+                        } else {
+                            console.error('Invalid or incomplete customer data:', JSON.stringify(customer, null, 2));
+                        }
+                    });
+                } else {
+                    console.error('Data received is not an array:', JSON.stringify(customers, null, 2));
+                }
+            }).catch(error => console.error('Error loading data:', error));
+        });
+
+
+    
+        function updateInfo() {
+            var updatedName = document.getElementById('name').value;
+            var updatedRoute = document.getElementById('route').value;
+            var customerCode = document.getElementById('customer_code').value;
+    
+            if (!routeColors[updatedRoute]) {
+                routeColors[updatedRoute] = getRandomColor();
+            }
+
+            fetch('http://127.0.0.1:5000/update', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    customer_code: customerCode,
+                    name: updatedName,
+                    area: updatedRoute
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Success:', data);
+                document.getElementById('info').style.display = 'none'; // Hide the form after update
+                // Update marker color and position if needed
+                var marker = markers[customerCode];
+                if (marker) {
+                    marker.setStyle({fillColor: routeColors[updatedRoute]});
+                }
+            })
+            .catch((error) => {
+                console.error('Error:', error);
+            });
+        }
+
+
+        function editCustomersInPolygon() {
+            var lastLayer = drawnItems.getLayers().pop();
+            if (lastLayer) {
+                updateCustomersInPolygon(lastLayer, true);
+            } else {
+                console.error('No polygon has been drawn yet.');
+            }
+        }
+        
+        function updateCustomersInPolygon(layer, updateAll = false) {
+            var layers = layer.getLayers();
+            layers.forEach(function(overlay) {
+                if (overlay instanceof L.Polygon) {
+                    let customerData = [];
+                    let poly = turf.polygon([overlay.getLatLngs().map(latlngs => latlngs.map(latlng => [latlng.lng, latlng.lat]))]);
+                    Object.values(markers).forEach(marker => {
+                        let point = turf.point([marker.getLatLng().lng, marker.getLatLng().lat]);
+                        if (turf.booleanPointInPolygon(point, poly)) {
+                            customerData.push({
+                                code: marker.options.code,
+                                area: updateAll ? document.getElementById('route').value : marker.options.area,
+                                name: updateAll ? document.getElementById('name').value : marker.options.name
+                            });
+                        }
+                    });
+        
+                    if (customerData.length > 0) {
+                        fetch('http://127.0.0.1:5000/updateCustomers', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify(customerData)
+                        })
+                        .then(response => response.json())
+                        .then(data => {
+                            console.log('Customers update success:', data);
+                        })
+                        .catch(error => {
+                            console.error('Error updating customers:', error);
+                        });
+                    }
+                }
+            });
+        }
+    </script>
+</body>
+</html>
